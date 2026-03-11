@@ -3,7 +3,7 @@ import time
 import threading
 import pyodbc
 import datetime as dt
-from flask import Flask, jsonify, render_template, send_from_directory, request
+from flask import Flask, jsonify, render_template, send_from_directory, request, redirect
 from dotenv import load_dotenv
 
 # =================================================
