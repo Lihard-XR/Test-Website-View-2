@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Control Interface Emulator</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <link rel="stylesheet" href="/static/emulator.css"/>
+  <script>
+    window.REPLAY_STEP_SEC = {{ replay_step_sec | tojson }};
+  </script>
+</head>
+<body class="emulator-body">
+  <div class="emulator-shell">
+    <section class="control-panel">
+      <div class="control-head">
+        <div>
+          <h1>Control Interface</h1>
+          <p>Operator View Mockup</p>
+        </div>
+      </div>
+
+      <div class="control-block">
+        <div class="label">TARGET DATE &amp; TIME</div>
+        <div class="datetime-box">
+          <input id="targetDate" type="date" />
+          <div class="divider"></div>
+          <input id="targetTime" type="time" step="1" />
+        </div>
+      </div>
+
+      <div class="control-block">
+        <div class="timeline-meta">
+          <span id="rangeStart">00:00:00</span>
+          <span id="rangeEnd">00:00:00</span>
+        </div>
+        <input id="timelineSlider" type="range" min="0" max="0" value="0" step="5" />
+      </div>
+
+      <div class="bottom-controls">
+        <div class="speed-panel">
+          <div class="label">PLAYBACK SPEED</div>
+          <div class="speed-group" id="speedGroup">
+            <button type="button" data-speed="1" class="speed-btn active">x1</button>
+            <button type="button" data-speed="10" class="speed-btn">x10</button>
+            <button type="button" data-speed="60" class="speed-btn">x60</button>
+          </div>
+        </div>
+
+        <div class="transport-group">
+          <button type="button" class="transport stop" id="stopBtn">■</button>
+          <button type="button" class="transport pause" id="pauseBtn">❚❚</button>
+          <button type="button" class="transport play" id="playBtn">▶</button>
+        </div>
+      </div>
+
+      <div class="status-line" id="emulatorStatus">기록 범위를 불러오는 중...</div>
+    </section>
+
+    <section class="dashboard-panel">
+      <div class="dashboard-topbar">
+        <div class="dashboard-title">Replay Dashboard</div>
+        <div class="dashboard-meta">
+          <span id="currentTimestamp">-</span>
+          <span id="readInterval">기본 5초 간격</span>
+        </div>
+      </div>
+      <div class="grid replay-grid" id="replayGrid"></div>
+    </section>
+  </div>
+
+  <script src="/static/emulator.js"></script>
+</body>
+</html>

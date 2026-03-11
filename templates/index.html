@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Factory Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <div class="app">
+    <header class="navbar">
+      <div class="title">4공장</div>
+      <div class="btns">
+        <div class="btn">공구관리 현황</div>
+        <div class="btn">생산 실적 현황</div>
+        <div class="btn">설비가동 현황</div>
+      </div>
+    </header>
+
+    <div class="main">
+      <div class="muted" id="lastUpdate">Last update: -</div>
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <button id="emulatorLauncher" class="side-launcher" type="button" aria-label="애뮬레이터 열기">
+      <span class="side-launcher__chevron">◀</span>
+      <span class="side-launcher__label">EMULATOR</span>
+    </button>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

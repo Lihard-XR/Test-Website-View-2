@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>설비 대시보드</title>
+
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/machine_detail.css">
+
+  <script>
+    window.MACHINE_IP = "{{ ip }}";
+  </script>
+</head>
+
+<body>
+  <div class="app">
+    <header class="navbar">
+      <div class="title">-번 설비</div>
+    </header>
+
+    <main class="main">
+      <section class="left">
+        <div class="panel panel-3d">
+          <div class="circle" aria-label="STOP">STOP</div>
+          <div id="threeCanvas" class="three-canvas"></div>
+          <div class="three-placeholder" id="threePlaceholder">3D</div>
+        </div>
+      </section>
+
+      <aside class="right">
+        <div class="panel panel-right">
+          <div class="tool-row">
+            <button class="tool-open" id="toolOpenBtn" aria-label="툴 리스트 열기" aria-expanded="false">
+              <span class="chev">></span>
+            </button>
+
+            <div class="tool-value" id="toolValue">-</div>
+
+            <div class="tool-drawer" id="toolDrawer" aria-hidden="true">
+              <div class="drawer-head">
+                <div class="drawer-title">툴 리스트</div>
+                <button class="drawer-close" id="toolCloseBtn" aria-label="툴 리스트 닫기">×</button>
+              </div>
+              <div class="drawer-body" id="toolList"></div>
+            </div>
+
+            <div class="backdrop" id="backdrop"></div>
+          </div>
+
+          <div class="box box-large">
+            <div class="box-title">권고 교체 구간</div>
+            <div class="date-range" id="dateRange">2025.12.05 ~ 2025.12.06</div>
+            <div class="subtext" id="remainText">남은 일수 - 8일</div>
+          </div>
+
+          <div class="grid-2">
+            <div class="box box-mid">
+              <div class="kv">
+                <div class="k">부하율</div>
+                <div class="v"><span id="loadValue">-</span><span class="unit">%</span></div>
+              </div>
+              <div class="divider"></div>
+              <div class="kv">
+                <div class="k">RPM</div>
+                <div class="v"><span id="rpmValue">-</span><span class="unit">s</span></div>
+              </div>
+            </div>
+
+            <div class="box box-mid box-quad">
+              <div class="quad">
+                <div class="cell">
+                  <div class="k">생산시간</div>
+                  <div class="v" id="prodTime">-<span class="unit">분</span></div>
+                </div>
+                <div class="cell">
+                  <div class="k">프로그램</div>
+                  <div class="v" id="programNo">-</div>
+                </div>
+                <div class="cell">
+                  <div class="k">알람코드</div>
+                  <div class="v" id="alarmCode">-</div>
+                </div>
+                <div class="cell">
+                  <div class="k">툴번호</div>
+                  <div class="v" id="toolNo">-</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="box box-chart">
+            <div class="legend">
+              <span class="lg">
+                <span class="swatch swatch-a"></span>부하율
+              </span>
+              <span class="lg">
+                <span class="swatch swatch-b"></span>RPM
+              </span>
+            </div>
+            <canvas id="chart"></canvas>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Graph Modal -->
+  <div class="chart-modal-backdrop" id="chartModalBackdrop" aria-hidden="true">
+    <div class="chart-modal" role="dialog" aria-modal="true" aria-labelledby="chartModalTitle">
+      <div class="chart-modal-head">
+        <div class="chart-modal-title" id="chartModalTitle">그래프 확대 보기</div>
+        <button type="button" class="chart-modal-close" id="chartModalCloseBtn" aria-label="확대 그래프 닫기">×</button>
+      </div>
+
+      <div class="chart-modal-meta" id="chartModalMeta">-</div>
+
+      <div class="chart-modal-legend">
+        <span class="lg">
+          <span class="swatch swatch-a"></span>부하율
+        </span>
+        <span class="lg">
+          <span class="swatch swatch-b"></span>RPM
+        </span>
+      </div>
+
+      <div class="chart-modal-body">
+        <canvas id="chartModalCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/machine_detail.js"></script>
+</body>
+</html>
