@@ -480,6 +480,11 @@ def api_machines():
     return jsonify(_CACHE["data"])
 
 
+@app.get("/")
+def home():
+    return redirect("/dashboard")
+    
+
 @app.get("/dashboard")
 def dashboard():
     return render_template("index.html")
