@@ -614,6 +614,296 @@ function downloadOperationExcel() {
   window.location.href = `/api/operation-status/export?${qs.toString()}`;
 }
 
+
+/* --------------------------------------------------
+ * 공구관리 현황 모달
+ * -------------------------------------------------- */
+
+const toolEls = {
+  openBtn: document.getElementById("toolStatusBtn"),
+  backdrop: document.getElementById("toolModalBackdrop"),
+  closeBtn: document.getElementById("toolModalClose"),
+  startDate: document.getElementById("toolStartDate"),
+  endDate: document.getElementById("toolEndDate"),
+  machine: document.getElementById("toolMachine"),
+  keyword: document.getElementById("toolKeyword"),
+  searchBtn: document.getElementById("toolSearchBtn"),
+  excelBtn: document.getElementById("toolExcelBtn"),
+  tableBody: document.getElementById("toolTableBody"),
+};
+
+let toolLastFocusedBeforeModal = null;
+let toolMachineLoaded = false;
+
+// 필수 요소 존재 여부
+function hasToolModalElements() {
+  return !!(
+    toolEls.openBtn &&
+    toolEls.backdrop &&
+    toolEls.closeBtn &&
+    toolEls.startDate &&
+    toolEls.endDate &&
+    toolEls.machine &&
+    toolEls.keyword &&
+    toolEls.searchBtn &&
+    toolEls.excelBtn &&
+    toolEls.tableBody
+  );
+}
+
+// 기본 날짜 설정
+function initToolModalDates() {
+  if (!toolEls.startDate || !toolEls.endDate) return;
+
+  const today = new Date();
+  toolEls.startDate.value = formatDateOnly(today);
+  toolEls.endDate.value = formatDateOnly(today);
+}
+
+// 설비 목록 로드
+async function loadToolMachineOptions() {
+  if (!toolEls.machine) return;
+  if (toolMachineLoaded) return;
+
+  try {
+    const { res, data } = await fetchJson("/api/tool-status/machines");
+
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.message || `HTTP ${res.status}`);
+    }
+
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+
+    toolEls.machine.innerHTML = `<option value="전체">전체</option>`;
+
+    rows.forEach((row) => {
+      const option = document.createElement("option");
+      option.value = row.ip ?? row.name ?? "";
+      option.textContent = row.name
+        ? `${row.name}`
+        : (row.ip ?? "미지정");
+      toolEls.machine.appendChild(option);
+    });
+
+    toolMachineLoaded = true;
+  } catch (err) {
+    console.error("[tool status] machine list load failed:", err);
+
+    // 목록 로드 실패 시에도 최소 동작은 가능하도록 전체만 남김
+    toolEls.machine.innerHTML = `<option value="전체">전체</option>`;
+  }
+}
+
+// 모달 열기
+async function openToolModal() {
+  if (!toolEls.backdrop) return;
+
+  toolLastFocusedBeforeModal = document.activeElement;
+
+  toolEls.backdrop.classList.add("open");
+  toolEls.backdrop.setAttribute("aria-hidden", "false");
+  toolEls.openBtn?.setAttribute("aria-expanded", "true");
+
+  await loadToolMachineOptions();
+  toolEls.closeBtn?.focus();
+}
+
+// 모달 닫기
+function closeToolModal() {
+  if (!toolEls.backdrop) return;
+
+  const returnTarget = toolLastFocusedBeforeModal || toolEls.openBtn;
+
+  returnTarget?.focus();
+  toolEls.backdrop.classList.remove("open");
+  toolEls.backdrop.setAttribute("aria-hidden", "true");
+  toolEls.openBtn?.setAttribute("aria-expanded", "false");
+}
+
+// 조회 조건 검증
+function validateToolFilters() {
+  const startDate = toolEls.startDate?.value || "";
+  const endDate = toolEls.endDate?.value || "";
+
+  if (!startDate || !endDate) {
+    alert("시작일과 종료일을 모두 입력해 주세요.");
+    return false;
+  }
+
+  if (startDate > endDate) {
+    alert("시작일은 종료일보다 클 수 없습니다.");
+    return false;
+  }
+
+  return true;
+}
+
+// 상태 뱃지 HTML
+function buildToolStatusBadge(status) {
+  const ui = statusToUI(status);
+  return `<span class="status-pill" style="background:${ui.color}">${escapeHtml(ui.label)}</span>`;
+}
+
+// 현재사용 표시 HTML
+function buildToolCurrentUseCell(row) {
+  const isCurrent =
+    row?.is_current_use === true ||
+    row?.is_current_use === 1 ||
+    row?.current_use === "사용중";
+
+  if (!isCurrent) return "";
+
+  return `<span class="tool-current-mark">🔄</span>`;
+}
+
+// 경고 셀 HTML
+function buildToolWarningCell(warning) {
+  const text = String(warning || "").trim();
+  if (!text) return "";
+
+  return `<span class="tool-warning-text">${escapeHtml(text)}</span>`;
+}
+
+// 표 렌더링
+function renderToolTable(rows) {
+  if (!toolEls.tableBody) return;
+
+  toolEls.tableBody.innerHTML = "";
+
+  if (!rows.length) {
+    toolEls.tableBody.innerHTML = `
+      <tr>
+        <td colspan="11" class="empty-cell">조회 결과가 없습니다.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
+      <td>${escapeHtml(row.name ?? "-")}</td>
+      <td>${escapeHtml(row.ip ?? "-")}</td>
+      <td>${buildToolStatusBadge(row.status)}</td>
+      <td>${escapeHtml(row.tool_no ?? "-")}</td>
+      <td>${escapeHtml(row.used_time ?? 0)}</td>
+      <td>${escapeHtml(row.limit_time ?? 0)}</td>
+      <td>${escapeHtml(row.life_pct ?? 0)}%</td>
+      <td>${buildToolWarningCell(row.warning)}</td>
+      <td>${escapeHtml(row.product_name ?? "-")}</td>
+      <td>${escapeHtml(row.last_used ?? "-")}</td>
+      <td>${buildToolCurrentUseCell(row)}</td>
+    `;
+
+    toolEls.tableBody.appendChild(tr);
+  });
+}
+
+// 조회
+async function loadToolStatus() {
+  if (!hasToolModalElements()) return;
+  if (!validateToolFilters()) return;
+
+  const startDate = toolEls.startDate.value;
+  const endDate = toolEls.endDate.value;
+  const machine = toolEls.machine.value.trim();
+  const keyword = toolEls.keyword.value.trim();
+
+  const qs = new URLSearchParams({
+    start_date: startDate,
+    end_date: endDate,
+    machine,
+    keyword,
+  });
+
+  try {
+    const { res, data } = await fetchJson(`/api/tool-status?${qs.toString()}`);
+
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.message || `HTTP ${res.status}`);
+    }
+
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    renderToolTable(rows);
+  } catch (err) {
+    console.error("[tool status] load failed:", err);
+    alert(err.message || "공구관리 현황 조회 실패");
+    renderToolTable([]);
+  }
+}
+
+// 엑셀 다운로드
+function downloadToolExcel() {
+  if (!hasToolModalElements()) return;
+  if (!validateToolFilters()) return;
+
+  const startDate = toolEls.startDate.value;
+  const endDate = toolEls.endDate.value;
+  const machine = toolEls.machine.value.trim();
+  const keyword = toolEls.keyword.value.trim();
+
+  const qs = new URLSearchParams({
+    start_date: startDate,
+    end_date: endDate,
+    machine,
+    keyword,
+  });
+
+  window.location.href = `/api/tool-status/export?${qs.toString()}`;
+}
+
+/* --------------------------------------------------
+ * 공구관리 현황 이벤트 바인딩
+ * -------------------------------------------------- */
+
+if (toolEls.openBtn) {
+  toolEls.openBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+
+    if (!hasToolModalElements()) {
+      alert("공구관리 현황 모달 HTML이 아직 연결되지 않았습니다.");
+      return;
+    }
+
+    openToolModal();
+    await loadToolStatus();
+  });
+}
+
+if (hasToolModalElements()) {
+  toolEls.closeBtn.addEventListener("click", closeToolModal);
+
+  toolEls.backdrop.addEventListener("click", (e) => {
+    if (e.target === toolEls.backdrop) {
+      closeToolModal();
+    }
+  });
+
+  toolEls.searchBtn.addEventListener("click", loadToolStatus);
+  toolEls.excelBtn.addEventListener("click", downloadToolExcel);
+
+  toolEls.keyword.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      loadToolStatus();
+    }
+  });
+
+  toolEls.machine.addEventListener("change", () => {
+    loadToolStatus();
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && toolEls.backdrop.classList.contains("open")) {
+      closeToolModal();
+    }
+  });
+
+  initToolModalDates();
+}
+
+
 /* --------------------------------------------------
  * 이벤트 바인딩
  * -------------------------------------------------- */
@@ -670,6 +960,352 @@ if (hasOperationModalElements()) {
 } else {
   console.warn("[operation modal] required elements not found");
 }
+
+/* --------------------------------------------------
+ * 생산 실적 현황 모달
+ * -------------------------------------------------- */
+
+const productionEls = {
+  openBtn: document.getElementById("productionStatusBtn"),
+  backdrop: document.getElementById("productionModalBackdrop"),
+  closeBtn: document.getElementById("productionModalClose"),
+
+  startDate: document.getElementById("productionStartDate"),
+  endDate: document.getElementById("productionEndDate"),
+  keyword: document.getElementById("productionKeyword"),
+  viewType: document.getElementById("productionViewType"),
+
+  searchBtn: document.getElementById("productionSearchBtn"),
+  excelBtn: document.getElementById("productionExcelBtn"),
+
+  tableBody: document.getElementById("productionTableBody"),
+  tableFoot: document.getElementById("productionTableFoot"),
+
+  breakdownSection: document.getElementById("productionBreakdownSection"),
+  breakdownBody: document.getElementById("productionBreakdownBody"),
+};
+
+let productionLastFocus = null;
+
+
+/* 날짜 초기화 */
+function initProductionDates() {
+  if (!productionEls.startDate || !productionEls.endDate) return;
+
+  const today = new Date();
+  productionEls.startDate.value = formatDateOnly(today);
+  productionEls.endDate.value = formatDateOnly(today);
+}
+
+
+/* 모달 열기 */
+function openProductionModal() {
+  if (!productionEls.backdrop) return;
+
+  productionLastFocus = document.activeElement;
+
+  productionEls.backdrop.classList.add("open");
+  productionEls.backdrop.setAttribute("aria-hidden", "false");
+  productionEls.openBtn?.setAttribute("aria-expanded", "true");
+
+  productionEls.closeBtn?.focus();
+
+  loadProductionStatus();
+}
+
+
+/* 모달 닫기 */
+function closeProductionModal() {
+  if (!productionEls.backdrop) return;
+
+  productionEls.backdrop.classList.remove("open");
+  productionEls.backdrop.setAttribute("aria-hidden", "true");
+  productionEls.openBtn?.setAttribute("aria-expanded", "false");
+
+  if (productionLastFocus) {
+    productionLastFocus.focus();
+  }
+}
+
+
+/* 합계 계산 */
+// function buildProductionSummary(rows) {
+
+//   let total = 0;
+//   let cumulative = 0;
+//   let avg = 0;
+
+//   rows.forEach(r => {
+
+//     total += Number(r.total_qty || 0);
+//     cumulative += Number(r.cumulative_qty || 0);
+//     avg += Number(r.avg_qty || 0);
+
+//   });
+
+//   if (rows.length > 0) {
+//     avg = (avg / rows.length).toFixed(1);
+//   }
+
+//   return {
+//     name: "합계",
+//     product_name: "-",
+//     total_qty: total,
+//     cumulative_qty: cumulative,
+//     avg_qty: avg,
+//     product_breakdown: ""
+//   };
+
+// }
+
+
+/* 테이블 렌더 */
+function renderProductionSummary(rows) {
+  if (!productionEls.tableFoot) return;
+
+  productionEls.tableFoot.innerHTML = "";
+
+  if (!rows.length) return;
+
+  const totalQty = rows.reduce((sum, row) => sum + Number(row.total_qty || 0), 0);
+  const cumulativeQty = rows.reduce((sum, row) => sum + Number(row.cumulative_qty || 0), 0);
+  const avgQty =
+    rows.length > 0
+      ? rows.reduce((sum, row) => sum + Number(row.avg_qty || 0), 0) / rows.length
+      : 0;
+
+  const tr = document.createElement("tr");
+  tr.className = "summary-row";
+  tr.innerHTML = `
+    <td colspan="2">합계 / 평균</td>
+    <td>${fmtNumber(totalQty)}</td>
+    <td>${fmtNumber(cumulativeQty)}</td>
+    <td>${avgQty.toFixed(1)}</td>
+  `;
+
+  productionEls.tableFoot.appendChild(tr);
+}
+
+function renderProductionTable(rows) {
+  if (!productionEls.tableBody) return;
+
+  productionEls.tableBody.innerHTML = "";
+
+  if (!rows.length) {
+    productionEls.tableBody.innerHTML = `
+      <tr>
+        <td colspan="5" class="empty-cell">조회 결과가 없습니다.</td>
+      </tr>
+    `;
+    renderProductionSummary([]);
+    return;
+  }
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
+      <td>${escapeHtml(row.name ?? "-")}</td>
+      <td>${escapeHtml(row.product_name ?? "-")}</td>
+      <td>${fmtNumber(row.total_qty)}</td>
+      <td>${fmtNumber(row.cumulative_qty)}</td>
+      <td>${toFiniteNumber(row.avg_qty, 0).toFixed(1)}</td>
+    `;
+
+    productionEls.tableBody.appendChild(tr);
+  });
+
+  renderProductionSummary(rows);
+}
+
+function renderProductionBreakdown(rows, viewType) {
+  if (!productionEls.breakdownSection || !productionEls.breakdownBody) return;
+
+  if (viewType !== "machine") {
+    productionEls.breakdownSection.style.display = "none";
+    return;
+  }
+
+  productionEls.breakdownSection.style.display = "";
+  productionEls.breakdownBody.innerHTML = "";
+
+  const flatRows = [];
+
+  rows.forEach((row) => {
+    const machineName = row.name ?? "-";
+    const breakdownRows = Array.isArray(row.breakdown_rows) ? row.breakdown_rows : [];
+
+    breakdownRows.forEach((item) => {
+      flatRows.push({
+        name: machineName,
+        product_name: item.product_name ?? "-",
+        qty: Number(item.qty || 0),
+      });
+    });
+  });
+
+  if (!flatRows.length) {
+    productionEls.breakdownBody.innerHTML = `
+      <tr>
+        <td colspan="3" class="empty-cell">상세 데이터가 없습니다.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  flatRows.forEach((row) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(row.name)}</td>
+      <td>${escapeHtml(row.product_name)}</td>
+      <td>${fmtNumber(row.qty)}</td>
+    `;
+    productionEls.breakdownBody.appendChild(tr);
+  });
+}
+
+
+/* 조회 */
+async function loadProductionStatus() {
+  if (
+    !productionEls.startDate ||
+    !productionEls.endDate ||
+    !productionEls.viewType ||
+    !productionEls.tableBody
+  ) {
+    return;
+  }
+
+  const start = productionEls.startDate.value;
+  const end = productionEls.endDate.value;
+  const keyword = productionEls.keyword.value.trim();
+  const viewType = productionEls.viewType.value;
+
+  if (!start || !end) {
+    alert("시작일과 종료일을 모두 입력해 주세요.");
+    return;
+  }
+
+  if (start > end) {
+    alert("시작일은 종료일보다 클 수 없습니다.");
+    return;
+  }
+
+  const qs = new URLSearchParams({
+    start_date: start,
+    end_date: end,
+    view_type: viewType,
+    keyword,
+  });
+
+  try {
+    const { res, data } = await fetchJson(`/api/production-status?${qs.toString()}`);
+
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.message || `HTTP ${res.status}`);
+    }
+
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    renderProductionTable(rows);
+    renderProductionBreakdown(rows, viewType);
+  } catch (err) {
+    console.error("production status error", err);
+    alert(err.message || "생산 실적 조회 실패");
+    renderProductionTable([]);
+    renderProductionBreakdown([], viewType);
+  }
+}
+
+
+/* 엑셀 다운로드 */
+function downloadProductionExcel() {
+  if (
+    !productionEls.startDate ||
+    !productionEls.endDate ||
+    !productionEls.viewType
+  ) {
+    return;
+  }
+
+  const start = productionEls.startDate.value;
+  const end = productionEls.endDate.value;
+  const keyword = productionEls.keyword.value.trim();
+  const viewType = productionEls.viewType.value;
+
+  if (!start || !end) {
+    alert("시작일과 종료일을 모두 입력해 주세요.");
+    return;
+  }
+
+  if (start > end) {
+    alert("시작일은 종료일보다 클 수 없습니다.");
+    return;
+  }
+
+  const qs = new URLSearchParams({
+    start_date: start,
+    end_date: end,
+    view_type: viewType,
+    keyword,
+  });
+
+  window.location.href = `/api/production-status/export?${qs.toString()}`;
+}
+
+
+/* 이벤트 바인딩 */
+
+if (productionEls.openBtn) {
+  productionEls.openBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    openProductionModal();
+  });
+}
+
+if (productionEls.closeBtn) {
+  productionEls.closeBtn.addEventListener("click", closeProductionModal);
+}
+
+if (productionEls.backdrop) {
+  productionEls.backdrop.addEventListener("click", (e) => {
+    if (e.target === productionEls.backdrop) {
+      closeProductionModal();
+    }
+  });
+}
+
+if (productionEls.searchBtn) {
+  productionEls.searchBtn.addEventListener("click", loadProductionStatus);
+}
+
+if (productionEls.excelBtn) {
+  productionEls.excelBtn.addEventListener("click", downloadProductionExcel);
+}
+
+if (productionEls.viewType) {
+  productionEls.viewType.addEventListener("change", loadProductionStatus);
+}
+
+if (productionEls.keyword) {
+  productionEls.keyword.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      loadProductionStatus();
+    }
+  });
+}
+
+window.addEventListener("keydown", (e) => {
+  if (
+    e.key === "Escape" &&
+    productionEls.backdrop &&
+    productionEls.backdrop.classList.contains("open")
+  ) {
+    closeProductionModal();
+  }
+});
+
+initProductionDates();
 
 /* --------------------------------------------------
  * 초기 실행
