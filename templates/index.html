@@ -1,31 +1,144 @@
 <!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Factory Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css"/>
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <div class="app">
     <header class="navbar">
       <div class="title">4공장</div>
-      <div class="btns">
-        <div class="btn">공구관리 현황</div>
-        <div class="btn">생산 실적 현황</div>
-        <div class="btn">설비가동 현황</div>
+
+      <div class="top-menu" aria-label="상단 메뉴">
+        <button id="toolStatusBtn" class="menu-btn" type="button">
+          공구관리 현황
+        </button>
+        <button id="productionStatusBtn" class="menu-btn" type="button">
+          생산 실적 현황
+        </button>
+        <button id="operationStatusBtn" class="top-btn" type="button" aria-haspopup="dialog" aria-controls="operationModalBackdrop">
+          설비가동 현황
+        </button>
       </div>
     </header>
 
-    <div class="main">
-      <div class="muted" id="lastUpdate">Last update: -</div>
-      <div class="grid" id="grid"></div>
-    </div>
+    <main class="main">
+      <div class="muted" id="lastUpdate" aria-live="polite">Last update: -</div>
+      <div class="grid" id="grid" aria-label="설비 카드 목록"></div>
+    </main>
 
-    <button id="emulatorLauncher" class="side-launcher" type="button" aria-label="애뮬레이터 열기">
-      <span class="side-launcher__chevron">◀</span>
+    <button
+      id="emulatorLauncher"
+      class="side-launcher"
+      type="button"
+      aria-label="애뮬레이터 열기"
+    >
+      <span class="side-launcher__chevron" aria-hidden="true">◀</span>
       <span class="side-launcher__label">EMULATOR</span>
     </button>
+  </div>
+
+  <div
+    id="operationModalBackdrop"
+    class="modal-backdrop"
+    aria-hidden="true"
+  >
+    <div
+      class="modal-panel operation-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="operationModalTitle"
+      aria-describedby="operationModalDesc"
+    >
+      <div class="modal-head">
+        <div class="modal-title" id="operationModalTitle">설비가동 현황</div>
+        <button
+          id="operationModalClose"
+          class="modal-close"
+          type="button"
+          aria-label="설비가동 현황 모달 닫기"
+        >
+          ×
+        </button>
+      </div>
+
+      <p id="operationModalDesc" class="sr-only">
+        설비별 가동율, 가동 시간, 비가동 시간을 조회하고 차트로 확인하는 창입니다.
+      </p>
+
+      <div class="modal-filter-row">
+        <div class="filter-item">
+          <label for="operationStartDate">시작일</label>
+          <input type="date" id="operationStartDate" name="operationStartDate" />
+        </div>
+
+        <div class="filter-item">
+          <label for="operationEndDate">종료일</label>
+          <input type="date" id="operationEndDate" name="operationEndDate" />
+        </div>
+
+        <div class="filter-item filter-keyword">
+          <label for="operationKeyword">설비명 / IP</label>
+          <input
+            type="text"
+            id="operationKeyword"
+            name="operationKeyword"
+            placeholder="설비명 또는 IP 검색"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="filter-actions">
+          <button id="operationSearchBtn" class="action-btn" type="button">
+            조회
+          </button>
+          <button id="operationExcelBtn" class="action-btn secondary" type="button">
+            엑셀 저장
+          </button>
+        </div>
+      </div>
+
+      <div class="operation-body">
+        <div class="operation-table-wrap">
+          <table class="status-table">
+            <caption class="sr-only">
+              설비별 가동율, 가동 시간, 비가동 시간 조회 결과
+            </caption>
+
+            <thead>
+              <tr>
+                <th scope="col">설비명</th>
+                <th scope="col">IP</th>
+                <th scope="col">가동율(%)</th>
+                <th scope="col">가동(분)</th>
+                <th scope="col">비가동(분)</th>
+              </tr>
+            </thead>
+
+            <tbody id="operationTableBody">
+              <tr>
+                <td colspan="5" class="empty-cell">조회 결과가 없습니다.</td>
+              </tr>
+            </tbody>
+
+            <tfoot id="operationTableFoot">
+              <!-- 합계 행이 필요하면 JS에서 여기에 추가 -->
+            </tfoot>
+          </table>
+        </div>
+
+        <div class="operation-chart-wrap">
+          <div class="chart-title" id="operationChartTitle">설비별 가동율</div>
+          <canvas
+            id="operationChart"
+            height="280"
+            aria-labelledby="operationChartTitle"
+          ></canvas>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>
