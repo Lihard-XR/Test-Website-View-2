@@ -141,6 +141,249 @@
     </div>
   </div>
 
+    <!-- =========================================================
+       공구관리 현황 모달
+  ========================================================== -->
+  <div
+    id="toolModalBackdrop"
+    class="modal-backdrop"
+    aria-hidden="true"
+  >
+    <div
+      class="modal-panel operation-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="toolModalTitle"
+      aria-describedby="toolModalDesc"
+    >
+      <div class="modal-head">
+        <div class="modal-title" id="toolModalTitle">공구관리 현황</div>
+        <button
+          id="toolModalClose"
+          class="modal-close"
+          type="button"
+          aria-label="공구관리 현황 모달 닫기"
+        >
+          ×
+        </button>
+      </div>
+
+      <p id="toolModalDesc" class="sr-only">
+        설비별 공구 사용 현황을 기간, 설비, 품명 기준으로 조회하는 창입니다.
+      </p>
+
+      <div class="modal-filter-row">
+        <div class="filter-item">
+          <label for="toolStartDate">시작일</label>
+          <input type="date" id="toolStartDate" name="toolStartDate" />
+        </div>
+
+        <div class="filter-item">
+          <label for="toolEndDate">종료일</label>
+          <input type="date" id="toolEndDate" name="toolEndDate" />
+        </div>
+
+        <div class="filter-item">
+          <label for="toolMachine">설비</label>
+          <select id="toolMachine" name="toolMachine">
+            <option value="전체">전체</option>
+          </select>
+        </div>
+
+        <div class="filter-item filter-keyword">
+          <label for="toolKeyword">품명</label>
+          <input
+            type="text"
+            id="toolKeyword"
+            name="toolKeyword"
+            placeholder="품명 키워드 검색"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="filter-actions">
+          <button id="toolSearchBtn" class="action-btn" type="button">
+            조회
+          </button>
+          <button id="toolExcelBtn" class="action-btn secondary" type="button">
+            엑셀 저장
+          </button>
+        </div>
+      </div>
+
+      <div class="operation-body" style="grid-template-columns: 1fr;">
+        <div class="operation-table-wrap">
+          <table class="status-table">
+            <caption class="sr-only">
+              설비별 공구 사용시간, 한계시간, 수명, 경고, 제품명 조회 결과
+            </caption>
+
+            <thead>
+              <tr>
+                <th scope="col">설비명</th>
+                <th scope="col">IP</th>
+                <th scope="col">상태</th>
+                <th scope="col">공구번호</th>
+                <th scope="col">사용시간</th>
+                <th scope="col">한계시간</th>
+                <th scope="col">수명(%)</th>
+                <th scope="col">경고</th>
+                <th scope="col">제품명</th>
+                <th scope="col">마지막 사용</th>
+                <th scope="col">현재사용</th>
+              </tr>
+            </thead>
+
+            <tbody id="toolTableBody">
+              <tr>
+                <td colspan="11" class="empty-cell">조회 결과가 없습니다.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================
+      생산 실적 현황 모달
+  ========================================================== -->
+  <div
+    id="productionModalBackdrop"
+    class="modal-backdrop"
+    aria-hidden="true"
+  >
+    <div
+      class="modal-panel operation-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="productionModalTitle"
+    >
+      <!-- 헤더 -->
+      <div class="modal-head">
+        <div class="modal-title" id="productionModalTitle">
+          생산 실적 현황
+        </div>
+
+        <button
+          id="productionModalClose"
+          class="modal-close"
+          type="button"
+          aria-label="생산 실적 현황 모달 닫기"
+        >
+          ×
+        </button>
+      </div>
+
+      <!-- 필터 -->
+      <div class="modal-filter-row">
+
+        <div class="filter-item">
+          <label for="productionStartDate">시작일</label>
+          <input type="date" id="productionStartDate">
+        </div>
+
+        <div class="filter-item">
+          <label for="productionEndDate">종료일</label>
+          <input type="date" id="productionEndDate">
+        </div>
+
+        <div class="filter-item">
+          <label for="productionKeyword">키워드</label>
+          <input
+            type="text"
+            id="productionKeyword"
+            placeholder="설비명 / 품명 검색"
+          >
+        </div>
+
+        <div class="filter-item">
+          <label for="productionViewType">조회유형</label>
+          <select id="productionViewType">
+            <option value="machine">설비</option>
+            <option value="product">제품</option>
+          </select>
+        </div>
+
+        <div class="filter-actions">
+          <button
+            id="productionSearchBtn"
+            class="action-btn"
+            type="button"
+          >
+            조회
+          </button>
+
+          <button
+            id="productionExcelBtn"
+            class="action-btn secondary"
+            type="button"
+          >
+            엑셀
+          </button>
+        </div>
+
+      </div>
+
+      <!-- 테이블 -->
+      <div class="operation-body" style="grid-template-columns: 1fr;">
+        <!-- 상단 요약 표 -->
+        <div class="operation-table-wrap">
+          <table class="status-table">
+            <caption class="sr-only">
+              생산 실적 현황 요약 결과
+            </caption>
+
+            <thead>
+              <tr>
+                <th scope="col">설비명</th>
+                <th scope="col">품명</th>
+                <th scope="col">총계</th>
+                <th scope="col">누계</th>
+                <th scope="col">평균</th>
+              </tr>
+            </thead>
+
+            <tbody id="productionTableBody">
+              <tr>
+                <td colspan="5" class="empty-cell">조회 결과가 없습니다.</td>
+              </tr>
+            </tbody>
+
+            <tfoot id="productionTableFoot"></tfoot>
+          </table>
+        </div>
+
+        <!-- 하단 품목별 누계 상세 표 -->
+        <div
+          id="productionBreakdownSection"
+          class="operation-table-wrap"
+          style="margin-top: 14px;"
+        >
+          <table class="status-table">
+            <caption class="sr-only">
+              설비별 품목 누계 상세 결과
+            </caption>
+
+            <thead>
+              <tr>
+                <th scope="col">설비명</th>
+                <th scope="col">품명</th>
+                <th scope="col">누계</th>
+              </tr>
+            </thead>
+
+            <tbody id="productionBreakdownBody">
+              <tr>
+                <td colspan="3" class="empty-cell">상세 데이터가 없습니다.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>
