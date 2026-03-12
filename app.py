@@ -44,6 +44,12 @@ _MACHINE_STATUS_SCHEMA_CACHE = {
     "ts": 0.0,
 }
 
+# 공구관리 조회 캐시
+_TOOL_STATUS_CACHE = {
+    # key: (start_date, end_date, machine, keyword)
+    # value: {"ts": float, "rows": list}
+}
+
 # DB 스냅샷 갱신 주기
 REFRESH_SEC = 2.0
 
@@ -226,6 +232,15 @@ def make_tool_warning_text(life_pct: float, raw_warning: str = ""):
     return ""
 
 
+def make_tool_cache_key(start_date: str, end_date: str, machine: str = "", keyword: str = ""):
+    return (
+        (start_date or "").strip(),
+        (end_date or "").strip(),
+        (machine or "").strip(),
+        (keyword or "").strip().lower(),
+    )
+
+
 def query_tool_status_machine_list():
     """
     공구관리 현황 설비 드롭다운용 목록.
@@ -296,57 +311,118 @@ def query_today_output_by_ip(conn, target_time: dt.datetime | None = None) -> di
     """
     기준 시각까지의 당일 누적 생산량(part_count)을 ip별로 계산한다.
 
-    계산 방식:
-    - target_time 날짜의 00:00:00 ~ target_time
-    - ip별 MAX(part_count)를 당일 생산량으로 사용
+    계산 기준:
+    1) 전일 마지막 part_count를 baseline으로 우선 사용
+    2) 전일 값이 없으면 당일 첫 비-OFFLINE row의 part_count를 baseline으로 사용
+    3) 그것도 없으면 0 사용
 
-    전제:
-    - machine_status.part_count가 당일 누적 생산량 성격의 값일 때 적합
+    생산량:
+    - current_count - baseline_count
+    - 음수면 카운터 리셋으로 보고 current_count 사용
     """
     out = {}
     cur = conn.cursor()
 
     base_time = target_time or dt.datetime.now()
-    start = dt.datetime.combine(base_time.date(), dt.time(0, 0, 0))
-    end = base_time
+    today_start = dt.datetime.combine(base_time.date(), dt.time(0, 0, 0))
+    prev_day_start = today_start - dt.timedelta(days=1)
 
     cur.execute("""
-        WITH max_count AS (
-            SELECT
-                ip,
-                MAX(ISNULL(part_count, 0)) AS qty
-            FROM dbo.machine_status
-            WHERE [timestamp] BETWEEN ? AND ?
-              AND ip IS NOT NULL
-            GROUP BY ip
-        ),
-        name_pick AS (
+        WITH prev_last AS (
             SELECT
                 ip,
                 name,
+                ISNULL(part_count, 0) AS prev_count,
                 ROW_NUMBER() OVER (
                     PARTITION BY ip
-                    ORDER BY [timestamp] DESC
+                    ORDER BY [timestamp] DESC, id DESC
                 ) AS rn
             FROM dbo.machine_status
-            WHERE [timestamp] BETWEEN ? AND ?
+            WHERE [timestamp] >= ?
+              AND [timestamp] < ?
               AND ip IS NOT NULL
+        ),
+        today_first_online AS (
+            SELECT
+                ip,
+                name,
+                ISNULL(part_count, 0) AS first_online_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ip
+                    ORDER BY [timestamp] ASC, id ASC
+                ) AS rn
+            FROM dbo.machine_status
+            WHERE [timestamp] >= ?
+              AND [timestamp] <= ?
+              AND ip IS NOT NULL
+              AND ISNULL(status, '') NOT IN ('OFFLINE')
+        ),
+        today_last AS (
+            SELECT
+                ip,
+                name,
+                ISNULL(part_count, 0) AS current_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ip
+                    ORDER BY [timestamp] DESC, id DESC
+                ) AS rn
+            FROM dbo.machine_status
+            WHERE [timestamp] >= ?
+              AND [timestamp] <= ?
+              AND ip IS NOT NULL
+        ),
+        merged AS (
+            SELECT
+                COALESCE(tl.ip, pl.ip, fo.ip) AS ip,
+                COALESCE(tl.name, pl.name, fo.name, COALESCE(tl.ip, pl.ip, fo.ip)) AS name,
+                pl.prev_count,
+                fo.first_online_count,
+                tl.current_count
+            FROM (SELECT ip, name, prev_count FROM prev_last WHERE rn = 1) pl
+            FULL OUTER JOIN (SELECT ip, name, first_online_count FROM today_first_online WHERE rn = 1) fo
+              ON pl.ip = fo.ip
+            FULL OUTER JOIN (SELECT ip, name, current_count FROM today_last WHERE rn = 1) tl
+              ON COALESCE(pl.ip, fo.ip) = tl.ip
         )
         SELECT
-            m.ip,
-            COALESCE(n.name, m.ip) AS name,
-            m.qty
-        FROM max_count m
-        LEFT JOIN name_pick n
-          ON m.ip = n.ip
-         AND n.rn = 1
-        ORDER BY COALESCE(n.name, m.ip)
-    """, (start, end, start, end))
+            ip,
+            name,
+            ISNULL(prev_count, 0) AS prev_count,
+            ISNULL(first_online_count, 0) AS first_online_count,
+            ISNULL(current_count, 0) AS current_count
+        FROM merged
+        WHERE ip IS NOT NULL
+    """, (
+        prev_day_start, today_start,
+        today_start, base_time,
+        today_start, base_time,
+    ))
 
-    for ip, name, qty in cur.fetchall():
+    for ip, name, prev_count, first_online_count, current_count in cur.fetchall():
         ip = str(ip)
+        prev_count = safe_int(prev_count, 0)
+        first_online_count = safe_int(first_online_count, 0)
+        current_count = safe_int(current_count, 0)
+
+        # baseline 우선순위:
+        # 1. 전일 마지막 값
+        # 2. 당일 첫 비-OFFLINE 값
+        # 3. 0
+        if prev_count > 0:
+            baseline = prev_count
+        elif first_online_count > 0:
+            baseline = first_online_count
+        else:
+            baseline = 0
+
+        if current_count >= baseline:
+            qty = current_count - baseline
+        else:
+            # 카운터 리셋 발생
+            qty = current_count
+
         out[ip] = {
-            "qty": max(0, safe_int(qty, 0)),
+            "qty": max(0, qty),
             "name": str(name or ip),
         }
 
@@ -433,7 +509,7 @@ def query_replay_snapshot(at_time: dt.datetime):
     기준 시각 이전 데이터가 없는 경우,
     해당 날짜의 가장 이른 시각으로 fallback 한다.
 
-    생산량은 target_at 기준 당일 누적 생산량(MAX(part_count))으로 통일한다.
+    생산량은 target_at 기준 당일 누적 생산량으로 통일한다.
     """
     day_start = dt.datetime.combine(at_time.date(), dt.time.min)
     day_end = dt.datetime.combine(at_time.date(), dt.time.max)
@@ -657,22 +733,323 @@ def append_operation_summary_row(rows: list):
     }]
 
 
+def query_production_status(start_date: str, end_date: str, view_type: str = "machine", keyword: str = ""):
+    """
+    생산 실적 현황 조회.
+
+    view_type:
+    - machine : 설비 기준 집계
+    - product : 제품 기준 집계
+
+    기준:
+    - part_name   : 품명
+    - part_count  : 당일 누적 카운터로 보고, 일 생산량은 MAX - MIN
+    - total_count : 설비 기준 누계
+    """
+    start_day = dt.datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_day = dt.datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    if start_day > end_day:
+        raise ValueError("start_date must be <= end_date")
+
+    start_dt = dt.datetime.combine(start_day, dt.time.min)
+    end_dt = dt.datetime.combine(end_day + dt.timedelta(days=1), dt.time.min)
+
+    view_type = (view_type or "machine").strip().lower()
+    if view_type not in ("machine", "product"):
+        view_type = "machine"
+
+    keyword = (keyword or "").strip()
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        base_sql = """
+            WITH daily_product AS (
+                SELECT
+                    CAST([timestamp] AS DATE) AS work_date,
+                    [ip],
+                    COALESCE(NULLIF([name], ''), [ip]) AS name,
+                    COALESCE(NULLIF([part_name], ''), '(미지정)') AS part_name,
+
+                    /* 하루 생산량 = MAX(part_count) - MIN(part_count) */
+                    CASE
+                        WHEN MAX(ISNULL([part_count], 0)) - MIN(ISNULL([part_count], 0)) < 0 THEN 0
+                        ELSE MAX(ISNULL([part_count], 0)) - MIN(ISNULL([part_count], 0))
+                    END AS qty,
+
+                    MAX(ISNULL([total_count], 0)) AS total_count
+                FROM dbo.machine_status
+                WHERE [timestamp] >= ?
+                  AND [timestamp] < ?
+        """
+        params = [start_dt, end_dt]
+
+        if keyword:
+            like_kw = f"%{keyword}%"
+            base_sql += """
+                  AND (
+                        [name] LIKE ?
+                     OR [ip] LIKE ?
+                     OR [part_name] LIKE ?
+                  )
+            """
+            params.extend([like_kw, like_kw, like_kw])
+
+        base_sql += """
+                GROUP BY
+                    CAST([timestamp] AS DATE),
+                    [ip],
+                    COALESCE(NULLIF([name], ''), [ip]),
+                    COALESCE(NULLIF([part_name], ''), '(미지정)')
+            )
+        """
+
+        if view_type == "machine":
+            sql = base_sql + """
+                , machine_totals AS (
+                    SELECT
+                        ip,
+                        name,
+                        SUM(qty) AS total_qty,
+                        MAX(total_count) AS cumulative_qty,
+                        COUNT(DISTINCT work_date) AS work_days
+                    FROM daily_product
+                    GROUP BY ip, name
+                ),
+                product_totals AS (
+                    SELECT
+                        ip,
+                        name,
+                        part_name,
+                        SUM(qty) AS product_qty
+                    FROM daily_product
+                    GROUP BY ip, name, part_name
+                ),
+                top_product AS (
+                    SELECT
+                        ip,
+                        name,
+                        part_name,
+                        product_qty,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ip
+                            ORDER BY product_qty DESC, part_name ASC
+                        ) AS rn
+                    FROM product_totals
+                ),
+                product_breakdown AS (
+                    SELECT
+                        ip,
+                        name,
+                        STRING_AGG(
+                            CONCAT(part_name, '(', CAST(product_qty AS NVARCHAR(30)), ')'),
+                            ' / '
+                        ) AS product_breakdown
+                    FROM product_totals
+                    GROUP BY ip, name
+                )
+                SELECT
+                    mt.name,
+                    COALESCE(tp.part_name, '-') AS product_name,
+                    mt.total_qty,
+                    mt.cumulative_qty,
+                    ROUND(
+                        CAST(mt.total_qty AS FLOAT) / NULLIF(mt.work_days, 0),
+                        1
+                    ) AS avg_qty,
+                    COALESCE(pb.product_breakdown, '') AS product_breakdown
+                FROM machine_totals mt
+                LEFT JOIN top_product tp
+                  ON mt.ip = tp.ip
+                 AND mt.name = tp.name
+                 AND tp.rn = 1
+                LEFT JOIN product_breakdown pb
+                  ON mt.ip = pb.ip
+                 AND mt.name = pb.name
+                ORDER BY mt.name, mt.ip
+            """
+        else:
+            sql = base_sql + """
+                , product_totals AS (
+                    SELECT
+                        part_name,
+                        SUM(qty) AS total_qty,
+                        COUNT(DISTINCT work_date) AS work_days
+                    FROM daily_product
+                    GROUP BY part_name
+                ),
+                machine_totals AS (
+                    SELECT
+                        part_name,
+                        ip,
+                        name,
+                        SUM(qty) AS machine_qty,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY part_name
+                            ORDER BY SUM(qty) DESC, name ASC
+                        ) AS rn
+                    FROM daily_product
+                    GROUP BY part_name, ip, name
+                )
+                SELECT
+                    COALESCE(mt.name, '-') AS name,
+                    pt.part_name AS product_name,
+                    pt.total_qty,
+                    pt.total_qty AS cumulative_qty,
+                    ROUND(
+                        CAST(pt.total_qty AS FLOAT) / NULLIF(pt.work_days, 0),
+                        1
+                    ) AS avg_qty,
+                    CAST('' AS NVARCHAR(4000)) AS product_breakdown
+                FROM product_totals pt
+                LEFT JOIN machine_totals mt
+                  ON pt.part_name = mt.part_name
+                 AND mt.rn = 1
+                ORDER BY pt.part_name
+            """
+
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    result = []
+    for row in rows:
+        raw_breakdown = str(getattr(row, "product_breakdown", "") or "").strip()
+
+        breakdown_rows = []
+        if raw_breakdown:
+            for item in raw_breakdown.split(" / "):
+                item = item.strip()
+                if not item:
+                    continue
+
+                # 예: "(HPV102 HEAD BLOCK)(61)" 또는 "UNKNOWN(3006)"
+                if "(" in item and item.endswith(")"):
+                    pos = item.rfind("(")
+                    pname = item[:pos].strip()
+                    qty_text = item[pos + 1:-1].strip()
+
+                    breakdown_rows.append({
+                        "product_name": pname or "-",
+                        "qty": safe_int(qty_text, 0),
+                    })
+
+        result.append({
+            "name": str(getattr(row, "name", "") or "-"),
+            "product_name": str(getattr(row, "product_name", "") or "-"),
+            "total_qty": max(0, safe_int(getattr(row, "total_qty", 0), 0)),
+            "cumulative_qty": max(0, safe_int(getattr(row, "cumulative_qty", 0), 0)),
+            "avg_qty": round(safe_float(getattr(row, "avg_qty", 0), 0), 1),
+            "product_breakdown": raw_breakdown,
+            "breakdown_rows": breakdown_rows,
+        })
+
+    return result
+
+
+def append_production_summary_row(rows: list, view_type: str = "machine"):
+    """
+    생산 실적 현황 리스트 마지막에 합계 row를 추가한다.
+    """
+    total_qty = sum(safe_int(r.get("total_qty"), 0) for r in rows)
+    cumulative_qty = sum(safe_int(r.get("cumulative_qty"), 0) for r in rows)
+
+    avg_qty = 0.0
+    if rows:
+        avg_qty = round(
+            sum(safe_float(r.get("avg_qty"), 0) for r in rows) / len(rows),
+            1
+        )
+
+    return rows + [{
+        "name": "합계",
+        "product_name": "-",
+        "total_qty": total_qty,
+        "cumulative_qty": cumulative_qty,
+        "avg_qty": avg_qty,
+        "product_breakdown": "",
+        "is_summary": True,
+        "view_type": view_type,
+    }]
+
+
+def build_production_status_excel(start_date: str, end_date: str, view_type: str = "machine", keyword: str = ""):
+    """
+    생산 실적 현황 데이터를 xlsx 파일로 생성한다.
+    """
+    rows = query_production_status(
+        start_date=start_date,
+        end_date=end_date,
+        view_type=view_type,
+        keyword=keyword,
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "생산실적현황"
+
+    bold = Font(bold=True)
+    head_fill = PatternFill("solid", fgColor="EAF2F8")
+
+    ws["A1"] = "생산 실적 현황"
+    ws["A1"].font = Font(bold=True, size=14)
+
+    ws["A2"] = "조회기간"
+    ws["B2"] = f"{start_date} ~ {end_date}"
+    ws["A3"] = "조회유형"
+    ws["B3"] = "설비" if view_type == "machine" else "제품"
+    ws["A4"] = "키워드"
+    ws["B4"] = keyword or "-"
+
+    if view_type == "machine":
+        headers = ["설비명", "품명", "총계", "누계", "평균", "품목별 누계"]
+    else:
+        headers = ["설비명", "품명", "총계", "누계", "평균"]
+
+    start_row = 6
+
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=start_row, column=col_idx, value=header)
+        cell.font = bold
+        cell.fill = head_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for i, row in enumerate(rows, start=start_row + 1):
+        ws.cell(i, 1, row["name"])
+        ws.cell(i, 2, row["product_name"])
+        ws.cell(i, 3, row["total_qty"])
+        ws.cell(i, 4, row["cumulative_qty"])
+        ws.cell(i, 5, row["avg_qty"])
+
+        if view_type == "machine":
+            ws.cell(i, 6, row["product_breakdown"])
+
+    widths = {
+        "A": 18,
+        "B": 30,
+        "C": 12,
+        "D": 12,
+        "E": 12,
+        "F": 50,
+    }
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio
+
+
 def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword: str = ""):
     """
     공구관리 현황 조회.
 
-    반환 컬럼:
-    - 설비명
-    - IP
-    - 상태
-    - 공구번호
-    - 사용시간
-    - 한계시간
-    - 수명(%)
-    - 경고
-    - 제품명
-    - 마지막사용
-    - 현재사용
+    개선 사항:
+    - 최대 조회 기간 30일 제한
+    - 10초 캐시
+    - ROW_NUMBER 제거
+    - GROUP BY + MAX(timestamp) 방식 사용
     """
     start_d = parse_date_only(start_date)
     end_d = parse_date_only(end_date)
@@ -683,11 +1060,23 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
     if start_d > end_d:
         raise ValueError("start_date must be <= end_date")
 
-    start_dt = dt.datetime.combine(start_d, dt.time.min)
-    end_dt = dt.datetime.combine(end_d + dt.timedelta(days=1), dt.time.min)
+    # 최대 조회 기간 제한 (30일)
+    day_span = (end_d - start_d).days + 1
+    if day_span > 30:
+        raise ValueError("공구관리 현황 조회 기간은 최대 30일까지 가능합니다.")
 
     machine = (machine or "").strip()
     keyword = (keyword or "").strip()
+
+    # 캐시 확인 (10초)
+    cache_key = make_tool_cache_key(start_date, end_date, machine, keyword)
+    cached = _TOOL_STATUS_CACHE.get(cache_key)
+    now_ts = time.time()
+    if cached and (now_ts - cached["ts"]) <= 10:
+        return cached["rows"]
+
+    start_dt = dt.datetime.combine(start_d, dt.time.min)
+    end_dt = dt.datetime.combine(end_d + dt.timedelta(days=1), dt.time.min)
 
     with get_conn() as conn:
         cols = get_machine_status_columns(conn)
@@ -698,6 +1087,7 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
         status_col = pick_existing_column(cols, ["status", "op_status", "operation_status"])
         tool_col = pick_existing_column(cols, ["tool_no", "tool_number", "tool"])
         use_time_col = pick_existing_column(cols, [
+            "tool_used",
             "use_time",
             "used_time",
             "tool_use_time",
@@ -706,6 +1096,7 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
             "tool_current_use_time",
         ])
         limit_time_col = pick_existing_column(cols, [
+            "tool_limit",
             "limit_time",
             "tool_limit_time",
             "tool_life_limit",
@@ -726,9 +1117,9 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
             "tool_alarm_msg",
         ])
         product_col = pick_existing_column(cols, [
+            "part_name",
             "product_name",
             "item_name",
-            "part_name",
             "pname",
             "품명",
         ])
@@ -749,61 +1140,56 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
         warning_sql = sql_ident(warning_col) if warning_col else None
         product_sql = sql_ident(product_col) if product_col else None
 
-        base_name_expr = (
-            f"COALESCE(CAST({name_sql} AS NVARCHAR(200)), CAST({ip_sql} AS NVARCHAR(100)))"
+        name_expr = (
+            f"COALESCE(CAST(ms.{name_sql} AS NVARCHAR(200)), CAST(ms.{ip_sql} AS NVARCHAR(100)))"
             if name_sql else
-            f"CAST({ip_sql} AS NVARCHAR(100))"
+            f"CAST(ms.{ip_sql} AS NVARCHAR(100))"
         )
 
-        base_status_expr = (
-            f"CAST({status_sql} AS NVARCHAR(50))"
+        status_expr = (
+            f"CAST(ms.{status_sql} AS NVARCHAR(50))"
             if status_sql else
             "CAST('UNKNOWN' AS NVARCHAR(50))"
         )
 
-        base_use_time_expr = (
-            f"COALESCE(TRY_CONVERT(FLOAT, {use_time_sql}), 0)"
+        use_time_expr = (
+            f"COALESCE(TRY_CONVERT(FLOAT, ms.{use_time_sql}), 0)"
             if use_time_sql else
             "0"
         )
 
-        base_limit_time_expr = (
-            f"COALESCE(TRY_CONVERT(FLOAT, {limit_time_sql}), 0)"
+        limit_time_expr = (
+            f"COALESCE(TRY_CONVERT(FLOAT, ms.{limit_time_sql}), 0)"
             if limit_time_sql else
             "0"
         )
 
-        base_life_pct_expr = (
-            f"COALESCE(TRY_CONVERT(FLOAT, {life_pct_sql}), 0)"
+        life_pct_expr = (
+            f"COALESCE(TRY_CONVERT(FLOAT, ms.{life_pct_sql}), 0)"
             if life_pct_sql else
             "0"
         )
 
-        base_warning_expr = (
-            f"CAST({warning_sql} AS NVARCHAR(200))"
+        warning_expr = (
+            f"CAST(ms.{warning_sql} AS NVARCHAR(200))"
             if warning_sql else
             "CAST('' AS NVARCHAR(200))"
         )
 
-        base_product_expr = (
-            f"CAST({product_sql} AS NVARCHAR(300))"
+        product_expr = (
+            f"CAST(ms.{product_sql} AS NVARCHAR(300))"
             if product_sql else
             "CAST('' AS NVARCHAR(300))"
         )
 
+        current_tool_expr = f"TRY_CONVERT(INT, latest_machine.{tool_sql})"
+
         sql = f"""
-            WITH base AS (
+            WITH latest_tool_ts AS (
                 SELECT
                     CAST({ip_sql} AS NVARCHAR(100)) AS ip,
-                    {base_name_expr} AS name,
-                    {base_status_expr} AS status,
                     TRY_CONVERT(INT, {tool_sql}) AS tool_no,
-                    {base_use_time_expr} AS used_time,
-                    {base_limit_time_expr} AS limit_time,
-                    {base_life_pct_expr} AS life_pct,
-                    {base_warning_expr} AS warning_text,
-                    {base_product_expr} AS product_name,
-                    {ts_sql} AS last_used
+                    MAX({ts_sql}) AS last_ts
                 FROM dbo.machine_status
                 WHERE {ts_sql} >= ?
                   AND {ts_sql} < ?
@@ -811,72 +1197,75 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
                   AND {tool_sql} IS NOT NULL
                   AND TRY_CONVERT(INT, {tool_sql}) IS NOT NULL
                   AND TRY_CONVERT(INT, {tool_sql}) <> 0
+                GROUP BY
+                    CAST({ip_sql} AS NVARCHAR(100)),
+                    TRY_CONVERT(INT, {tool_sql})
             ),
-            ranked AS (
-                SELECT *,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY ip, tool_no
-                           ORDER BY last_used DESC
-                       ) AS rn
-                FROM base
-            ),
-            current_tool AS (
-                SELECT ip, current_tool_no
-                FROM (
-                    SELECT
-                        CAST({ip_sql} AS NVARCHAR(100)) AS ip,
-                        TRY_CONVERT(INT, {tool_sql}) AS current_tool_no,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY {ip_sql}
-                            ORDER BY {ts_sql} DESC
-                        ) AS rn
-                    FROM dbo.machine_status
-                    WHERE {ts_sql} < ?
-                      AND {ip_sql} IS NOT NULL
-                      AND {tool_sql} IS NOT NULL
-                ) t
-                WHERE rn = 1
+            latest_machine_ts AS (
+                SELECT
+                    CAST({ip_sql} AS NVARCHAR(100)) AS ip,
+                    MAX({ts_sql}) AS last_ts
+                FROM dbo.machine_status
+                WHERE {ts_sql} < ?
+                  AND {ip_sql} IS NOT NULL
+                GROUP BY CAST({ip_sql} AS NVARCHAR(100))
             )
             SELECT
-                r.name,
-                r.ip,
-                r.status,
-                r.tool_no,
-                r.used_time,
-                r.limit_time,
-                r.life_pct,
-                r.warning_text,
-                r.product_name,
-                r.last_used,
+                {name_expr} AS name,
+                CAST(ms.{ip_sql} AS NVARCHAR(100)) AS ip,
+                {status_expr} AS status,
+                TRY_CONVERT(INT, ms.{tool_sql}) AS tool_no,
+                {use_time_expr} AS used_time,
+                {limit_time_expr} AS limit_time,
+                {life_pct_expr} AS life_pct,
+                {warning_expr} AS warning_text,
+                {product_expr} AS product_name,
+                ms.{ts_sql} AS last_used,
                 CASE
-                    WHEN ct.current_tool_no = r.tool_no THEN 1
+                    WHEN {current_tool_expr} = TRY_CONVERT(INT, ms.{tool_sql}) THEN 1
                     ELSE 0
                 END AS is_current_use
-            FROM ranked r
-            LEFT JOIN current_tool ct
-              ON ct.ip = r.ip
-            WHERE r.rn = 1
+            FROM latest_tool_ts lt
+            JOIN dbo.machine_status ms
+              ON CAST(ms.{ip_sql} AS NVARCHAR(100)) = lt.ip
+             AND TRY_CONVERT(INT, ms.{tool_sql}) = lt.tool_no
+             AND ms.{ts_sql} = lt.last_ts
+            LEFT JOIN latest_machine_ts lmt
+              ON lmt.ip = lt.ip
+            LEFT JOIN dbo.machine_status latest_machine
+              ON CAST(latest_machine.{ip_sql} AS NVARCHAR(100)) = lmt.ip
+             AND latest_machine.{ts_sql} = lmt.last_ts
+            WHERE 1 = 1
         """
 
         params = [start_dt, end_dt, end_dt]
 
         if machine and machine != "전체":
-            sql += """
-              AND (
-                    r.ip = ?
-                 OR r.name = ?
-              )
-            """
-            params.extend([machine, machine])
+            if name_sql:
+                sql += f"""
+                  AND (
+                        CAST(ms.{ip_sql} AS NVARCHAR(100)) = ?
+                     OR CAST(ms.{name_sql} AS NVARCHAR(200)) = ?
+                  )
+                """
+            else:
+                sql += f"""
+                  AND CAST(ms.{ip_sql} AS NVARCHAR(100)) = ?
+                """
+
+            if name_sql:
+                params.extend([machine, machine])
+            else:
+                params.append(machine)
 
         if keyword:
             sql += """
-              AND r.product_name LIKE ?
+              AND product_name LIKE ?
             """
             params.append(f"%{keyword}%")
 
         sql += """
-            ORDER BY r.name, r.ip, r.tool_no
+            ORDER BY name, ip, tool_no
         """
 
         cur = conn.cursor()
@@ -894,14 +1283,10 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
         limit_time = safe_float(getattr(row, "limit_time", 0), 0)
         life_pct = safe_float(getattr(row, "life_pct", 0), 0)
 
-        # 수명(%) 값이 비어 있으면 사용시간/한계시간 기반으로 계산
         if life_pct <= 0 and limit_time > 0 and used_time > 0:
             life_pct = round((used_time / limit_time) * 100, 1)
 
-        warning_text = make_tool_warning_text(
-            life_pct=life_pct,
-            raw_warning=str(getattr(row, "warning_text", "") or "")
-        )
+        warning_text = "경고" if safe_int(getattr(row, "tool_warn", 0), 0) == 1 else ""
 
         last_used = format_ts(getattr(row, "last_used", None))
         product_name = str(getattr(row, "product_name", "") or "")
@@ -922,6 +1307,21 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
             "current_use": "사용중" if is_current_use else "",
         })
 
+    # 캐시 저장
+    _TOOL_STATUS_CACHE[cache_key] = {
+        "ts": time.time(),
+        "rows": result,
+    }
+
+    # 캐시가 너무 커지는 것 방지
+    if len(_TOOL_STATUS_CACHE) > 100:
+        old_keys = sorted(
+            _TOOL_STATUS_CACHE.keys(),
+            key=lambda k: _TOOL_STATUS_CACHE[k]["ts"]
+        )
+        for k in old_keys[:20]:
+            _TOOL_STATUS_CACHE.pop(k, None)
+
     return result
 
 
@@ -931,7 +1331,7 @@ def query_tool_status(start_date: str, end_date: str, machine: str = "", keyword
 def query_machine_row_at(ip: str, at_time: dt.datetime):
     """
     특정 시각 이전 기준으로 해당 설비의 최신 row 1건 조회.
-    replay 기준 당일 누적 생산량(MAX(part_count))을 함께 반영한다.
+    replay 기준 당일 누적 생산량을 함께 반영한다.
     """
     with get_conn() as conn:
         cur = conn.cursor()
@@ -940,7 +1340,7 @@ def query_machine_row_at(ip: str, at_time: dt.datetime):
             FROM dbo.machine_status
             WHERE ip = ?
               AND [timestamp] <= ?
-            ORDER BY [timestamp] DESC
+            ORDER BY [timestamp] DESC, id DESC
         """, (ip, at_time))
         row = row_from_cursor_fetchone(cur, cur.fetchone())
 
@@ -1457,6 +1857,166 @@ def api_operation_status_export():
         return jsonify({"ok": False, "message": f"operation status export failed: {e}"}), 500
 
     filename = f"operation_status_{start_date}_{end_date}.xlsx"
+    return send_file(
+        bio,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/api/tool-status/machines")
+def api_tool_status_machines():
+    """
+    공구관리 현황 설비 드롭다운 목록.
+    """
+    try:
+        rows = query_tool_status_machine_list()
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"machine list query failed: {e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "count": len(rows),
+        "rows": rows,
+    })
+
+
+@app.get("/api/tool-status")
+def api_tool_status():
+    """
+    공구관리 현황 조회.
+
+    query params:
+    - start_date=YYYY-MM-DD
+    - end_date=YYYY-MM-DD
+    - machine=전체 또는 설비명/IP
+    - keyword=품명 키워드
+    """
+    start_date = request.args.get("start_date", "").strip()
+    end_date = request.args.get("end_date", "").strip()
+    machine = request.args.get("machine", "").strip()
+    keyword = request.args.get("keyword", "").strip()
+
+    if not start_date or not end_date:
+        return jsonify({"ok": False, "message": "start_date, end_date are required"}), 400
+
+    try:
+        rows = query_tool_status(
+            start_date=start_date,
+            end_date=end_date,
+            machine=machine,
+            keyword=keyword,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"tool status query failed: {e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "count": len(rows),
+        "rows": rows,
+        "start_date": start_date,
+        "end_date": end_date,
+        "machine": machine or "전체",
+        "keyword": keyword,
+    })
+
+
+@app.get("/api/tool-status/export")
+def api_tool_status_export():
+    """
+    공구관리 현황 엑셀 다운로드.
+    """
+    start_date = request.args.get("start_date", "").strip()
+    end_date = request.args.get("end_date", "").strip()
+    machine = request.args.get("machine", "").strip()
+    keyword = request.args.get("keyword", "").strip()
+
+    if not start_date or not end_date:
+        return jsonify({"ok": False, "message": "start_date, end_date are required"}), 400
+
+    try:
+        bio = build_tool_status_excel(
+            start_date=start_date,
+            end_date=end_date,
+            machine=machine,
+            keyword=keyword,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"tool status export failed: {e}"}), 500
+
+    filename = f"tool_status_{start_date}_{end_date}.xlsx"
+    return send_file(
+        bio,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+@app.get("/api/production-status")
+def api_production_status():
+    """
+    생산 실적 현황 조회.
+
+    query params:
+    - start_date=YYYY-MM-DD
+    - end_date=YYYY-MM-DD
+    - view_type=machine|product
+    - keyword=설비명/IP/품명 키워드
+    """
+    start_date = request.args.get("start_date", "").strip()
+    end_date = request.args.get("end_date", "").strip()
+    view_type = request.args.get("view_type", "machine").strip().lower()
+    keyword = request.args.get("keyword", "").strip()
+
+    if not start_date or not end_date:
+        return jsonify({"ok": False, "message": "start_date, end_date are required"}), 400
+
+    try:
+        rows = query_production_status(
+            start_date=start_date,
+            end_date=end_date,
+            view_type=view_type,
+            keyword=keyword,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"production status query failed: {e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "view_type": view_type,
+        "count": len(rows),
+        "rows": rows,
+        "start_date": start_date,
+        "end_date": end_date,
+        "keyword": keyword,
+    })
+
+
+@app.get("/api/production-status/export")
+def api_production_status_export():
+    """
+    생산 실적 현황 엑셀 다운로드.
+    """
+    start_date = request.args.get("start_date", "").strip()
+    end_date = request.args.get("end_date", "").strip()
+    view_type = request.args.get("view_type", "machine").strip().lower()
+    keyword = request.args.get("keyword", "").strip()
+
+    if not start_date or not end_date:
+        return jsonify({"ok": False, "message": "start_date, end_date are required"}), 400
+
+    try:
+        bio = build_production_status_excel(
+            start_date=start_date,
+            end_date=end_date,
+            view_type=view_type,
+            keyword=keyword,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"production status export failed: {e}"}), 500
+
+    filename = f"production_status_{view_type}_{start_date}_{end_date}.xlsx"
     return send_file(
         bio,
         as_attachment=True,
