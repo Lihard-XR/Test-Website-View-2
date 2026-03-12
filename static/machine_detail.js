@@ -450,15 +450,20 @@ window.addEventListener("storage", (event) => {
 function fitCanvas(canvas, ctx) {
   if (!canvas || !ctx) return false;
 
-  const rect = canvas.getBoundingClientRect();
-  if (!rect.width || !rect.height) return false;
+  const width = Math.floor(canvas.clientWidth);
+  const height = Math.floor(canvas.clientHeight);
+  if (!width || !height) return false;
 
   const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const displayWidth = Math.floor(width * dpr);
+  const displayHeight = Math.floor(height * dpr);
 
-  canvas.width = Math.floor(rect.width * dpr);
-  canvas.height = Math.floor(rect.height * dpr);
+  // 크기가 바뀐 경우에만 내부 버퍼 갱신
+  if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+    canvas.width = displayWidth;
+    canvas.height = displayHeight;
+  }
 
-  // 기존 transform 누적 방지
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.scale(dpr, dpr);
 
