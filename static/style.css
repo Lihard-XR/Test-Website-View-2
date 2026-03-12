@@ -570,6 +570,62 @@ textarea {
 }
 
 /* =========================
+   Tool Status Modal
+========================= */
+
+.status-table select {
+  width: 100%;
+  height: 42px;
+  border: 1px solid #9a9a9a;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 15px;
+  color: #111;
+  background: #fafafa;
+}
+
+.filter-item select {
+  width: 100%;
+  height: 42px;
+  border: 1px solid #9a9a9a;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 15px;
+  color: #111;
+  background: #fafafa;
+}
+
+.filter-item select:focus {
+  outline: none;
+  border-color: #555;
+  background: #fff;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.tool-warning-text {
+  font-weight: 800;
+  color: #b42318;
+}
+
+.tool-current-mark {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* =========================
    Chart Area
 ========================= */
 .chart-title {
